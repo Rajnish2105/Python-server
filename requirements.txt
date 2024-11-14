@@ -3,3 +3,5 @@ flask-cors
 opencv-python-headless
 numpy
 gunicorn
+flask-socketio
+eventlet
