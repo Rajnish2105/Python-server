@@ -1,5 +1,6 @@
-from flask import Flask, request, Response
+from flask import Flask, Response
 from flask_cors import CORS
+from flask_socketio import SocketIO
 import cv2
 import numpy as np
 import os
@@ -8,6 +9,7 @@ from threading import Lock
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # File paths for model files
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +40,9 @@ frame_data = None
 def process_image(img_data):
     try:
         # Convert byte array to NumPy array and decode the image
-        np_img = np.frombuffer(img_data, dtype=np.uint8)  # Convert byte array to NumPy array
-        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)  # Decode the image
-        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)  # Rotate the image if needed
+        np_img = np.frombuffer(img_data, dtype=np.uint8)
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
         # Object detection
         class_ids, confs, bbox = net.detect(img, confThreshold=0.6)
@@ -49,12 +51,12 @@ def process_image(img_data):
         if len(class_ids) != 0:
             for class_id, confidence, box in zip(class_ids.flatten(), confs.flatten(), bbox):
                 if confidence >= 0.7:  # Green box for high confidence
-                    color = (0, 255, 0)  # Green
-                    label_color = (0, 255, 0)  # Green text
+                    color = (0, 255, 0)
+                    label_color = (0, 255, 0)
                 elif 0.5 <= confidence < 0.7:  # Yellow box for moderate confidence
-                    color = (0, 255, 255)  # Yellow
-                    label_color = (0, 255, 255)  # Yellow text
-                else:  # If confidence is below 0.5, skip (or set a default color)
+                    color = (0, 255, 255)
+                    label_color = (0, 255, 255)
+                else:
                     continue
 
                 # Draw the bounding box and label
@@ -70,19 +72,17 @@ def process_image(img_data):
         print(f"Error processing image: {e}")
         return None
 
-
-# Route for handling the POST request containing image data
-@app.route('/upload_image', methods=['POST'])
-def upload_image():
+# WebSocket event to handle incoming images from the ESP32-CAM
+@socketio.on('image_stream')
+def handle_image_stream(img_data):
     global frame_data
     with lock:
-        img_data = request.data  # The raw binary image data from the ESP32-CAM
+        # Process and store the latest frame for streaming
         frame_data = process_image(img_data)
         if frame_data:
-            return "Image received", 200
+            print("Image received and processed.")
         else:
-            return "Error processing image", 500
-
+            print("Error processing image")
 
 # Route for the video feed that streams the processed images
 @app.route('/video_feed')
@@ -92,9 +92,8 @@ def video_feed():
             if frame_data:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-
+    # return Response('Somthing');
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
 if __name__ == '__main__':
-    app.run(debug=True, threaded=True)
+    socketio.run(app, debug=True)
