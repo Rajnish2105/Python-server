@@ -4,4 +4,3 @@ gunicorn
 opencv-python
 numpy
 eventlet
-
