@@ -1,6 +1,6 @@
 fastapi
-uvicorn==0.22.0
-gunicorn==20.1.0
+uvicorn
+gunicorn
 opencv-python
 numpy
 eventlet
