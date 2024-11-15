@@ -1,4 +1,4 @@
-from flask import Flask, Response
+from flask import Flask, Response, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO
 import cv2
