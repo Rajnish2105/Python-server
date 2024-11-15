@@ -1,10 +1,12 @@
 import os
 import cv2
 import numpy as np
-import eventlet
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from threading import Lock
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -28,10 +30,13 @@ net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
 
 # Shared frame buffer and queue to store frames
-frame_queue = []
+frame_queue = Queue(maxsize=10)
 frame_lock = Lock()
 
-# Function to process the image
+# Executor for background processing
+executor = ThreadPoolExecutor(max_workers=4)
+
+# Function to process the image in the background
 def process_image(img_data):
     try:
         # Convert byte array to NumPy array and decode the image
@@ -70,18 +75,21 @@ def process_image(img_data):
 # WebSocket endpoint to handle incoming images from the ESP32-CAM
 @app.websocket("/ws/image_stream")
 async def handle_image_stream(websocket: WebSocket):
-    global frame_queue
     await websocket.accept()
     try:
         while True:
             # Receive the image data (binary)
             img_data = await websocket.receive_bytes()
 
-            # Process the image synchronously
-            processed_frame = process_image(img_data)
+            # Process the image asynchronously in the background
+            loop = asyncio.get_event_loop()
+            processed_frame = await loop.run_in_executor(executor, process_image, img_data)
+
             if processed_frame:
-                with frame_lock:
-                    frame_queue.append(processed_frame)  # Add processed frame to queue
+                # Push the processed frame into the queue
+                if frame_queue.full():
+                    frame_queue.get()  # Remove the oldest frame if queue is full
+                frame_queue.put(processed_frame)
 
     except WebSocketDisconnect as e:
         print(f"Client disconnected: {e}")
@@ -94,12 +102,12 @@ async def video_feed():
     async def generate():
         while True:
             try:
-                with frame_lock:
-                    if frame_queue:
-                        # Get the oldest frame (first-in, first-out)
-                        frame_to_send = frame_queue.pop(0)
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame_to_send + b'\r\n')
+                # Get the latest frame from the queue (non-blocking)
+                if not frame_queue.empty():
+                    frame_to_send = frame_queue.get()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_to_send + b'\r\n')
+
             except Exception as e:
                 print(f"Error in video stream: {e}")
 
