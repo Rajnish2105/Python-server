@@ -1,3 +1,7 @@
+# making async
+import eventlet
+eventlet.monkey_patch();
+
 from flask import Flask, Response, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -5,9 +9,7 @@ import cv2
 import numpy as np
 import os
 import time
-import eventlet
 from threading import Lock
-eventlet.monkey_patch() 
 
 app = Flask(__name__)
 CORS(app)
@@ -88,7 +90,7 @@ def handle_image_stream(img_data):
 
 @app.route('/')
 def go_away():
-    return redirect('/video_feed');
+    return Response('Go to the video_feed page!')
 
 # Route for the video feed that streams the processed images
 @app.route('/video_feed')
@@ -102,4 +104,4 @@ def video_feed():
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    socketio.run(app)
