@@ -4,7 +4,6 @@ import numpy as np
 import eventlet
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, PlainTextResponse
-import asyncio
 from threading import Lock
 
 # Initialize FastAPI app
@@ -28,8 +27,8 @@ net.setInputScale(1.0 / 127.5)
 net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
 
-# Shared frame buffer
-latest_frame = None
+# Shared frame buffer and queue to store frames
+frame_queue = []
 frame_lock = Lock()
 
 # Function to process the image
@@ -71,16 +70,19 @@ def process_image(img_data):
 # WebSocket endpoint to handle incoming images from the ESP32-CAM
 @app.websocket("/ws/image_stream")
 async def handle_image_stream(websocket: WebSocket):
-    global latest_frame
+    global frame_queue
     await websocket.accept()
     try:
         while True:
             # Receive the image data
             img_data = await websocket.receive_bytes()
-            processed_frame = await asyncio.to_thread(process_image, img_data)
+
+            # Process the image synchronously
+            processed_frame = process_image(img_data)
             if processed_frame:
                 with frame_lock:
-                    latest_frame = processed_frame  # Overwrite the latest frame
+                    frame_queue.append(processed_frame)  # Add processed frame to queue
+
     except WebSocketDisconnect as e:
         print(f"Client disconnected: {e}")
     except Exception as e:
@@ -93,10 +95,11 @@ async def video_feed():
         while True:
             try:
                 with frame_lock:
-                    if latest_frame:
+                    if frame_queue:
+                        # Get the oldest frame (first-in, first-out)
+                        frame_to_send = frame_queue.pop(0)
                         yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + latest_frame + b'\r\n')
-                await asyncio.sleep(0.03)  # ~30 FPS
+                               b'Content-Type: image/jpeg\r\n\r\n' + frame_to_send + b'\r\n')
             except Exception as e:
                 print(f"Error in video stream: {e}")
 
