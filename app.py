@@ -1,17 +1,16 @@
-import eventlet
-eventlet.monkey_patch()
-
-from flask import Flask, Response
-from flask_cors import CORS
-from flask_socketio import SocketIO
+import os
 import cv2
 import numpy as np
-import os
-import queue
+import eventlet
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+import asyncio
+from threading import Lock
+import io
 
-app = Flask(__name__)
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+# Initialize FastAPI app
+app = FastAPI()
 
 # File paths for model files
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,9 +30,9 @@ net.setInputScale(1.0 / 127.5)
 net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
 
-# Queue for thread-safe frame handling
-frame_queue = queue.Queue(maxsize=5)
-
+# Eventlet queue for frame handling
+frame_queue = eventlet.queue.Queue(maxsize=5)
+frame_lock = Lock()
 
 # Function to process the image
 def process_image(img_data):
@@ -71,36 +70,49 @@ def process_image(img_data):
         print(f"Error processing image: {e}")
         return None
 
-
-# WebSocket event to handle incoming images from the ESP32-CAM
-@socketio.on('image_stream')
-def handle_image_stream(img_data):
+# WebSocket endpoint to handle incoming images from the ESP32-CAM
+@app.websocket("/ws/image_stream")
+async def handle_image_stream(websocket: WebSocket):
+    await websocket.accept()
     try:
-        processed_frame = process_image(img_data)
-        if processed_frame:
+        while True:
+            # Receive the image data
+            img_data = await websocket.receive_bytes()
+            await asyncio.to_thread(process_and_queue_frame, img_data)
+    except WebSocketDisconnect:
+        print("Client disconnected")
+
+# Function to process image and put it in the frame queue
+def process_and_queue_frame(img_data):
+    processed_frame = process_image(img_data)
+    if processed_frame:
+        with frame_lock:  # Lock to ensure thread-safe frame addition
             if frame_queue.full():
-                frame_queue.get()  # Remove oldest frame to maintain queue size
+                frame_queue.get()  # Remove the oldest frame to maintain queue size
             frame_queue.put(processed_frame)
             print("Image received and processed.")
-        else:
-            print("Error processing image")
-    except Exception as e:
-        print(f"Error in image_stream handler: {e}")
+    else:
+        print("Error processing image")
 
+@app.get('/')
+def go():
+    yield('something')
 
-@app.route('/video_feed')
-def video_feed():
-    def generate():
+# Route to stream video feed
+@app.get("/video_feed")
+async def video_feed():
+    async def generate():
         while True:
             try:
                 frame = frame_queue.get(timeout=1)  # Wait for the next frame
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            except queue.Empty:
+            except eventlet.queue.Empty:
                 continue  # No frame available, retry
 
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
-
+# Run FastAPI server using Uvicorn (FastAPI's ASGI server)
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, debug=True)

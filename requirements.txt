@@ -1,7 +1,5 @@
-Flask
-flask-cors
-opencv-python-headless
+fastapi
+uvicorn
+opencv-python
 numpy
-gunicorn
-flask-socketio
 eventlet
