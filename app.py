@@ -5,11 +5,13 @@ import cv2
 import numpy as np
 import os
 import time
+import eventlet
 from threading import Lock
+eventlet.monkey_patch() 
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 # File paths for model files
 script_dir = os.path.dirname(os.path.abspath(__file__))
