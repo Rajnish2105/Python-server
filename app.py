@@ -4,10 +4,8 @@ import numpy as np
 import eventlet
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 import asyncio
 from threading import Lock
-import io
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -30,8 +28,8 @@ net.setInputScale(1.0 / 127.5)
 net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
 
-# Eventlet queue for frame handling
-frame_queue = eventlet.queue.Queue(maxsize=5)
+# Shared frame buffer
+latest_frame = None
 frame_lock = Lock()
 
 # Function to process the image
@@ -73,30 +71,20 @@ def process_image(img_data):
 # WebSocket endpoint to handle incoming images from the ESP32-CAM
 @app.websocket("/ws/image_stream")
 async def handle_image_stream(websocket: WebSocket):
+    global latest_frame
     await websocket.accept()
     try:
         while True:
             # Receive the image data
             img_data = await websocket.receive_bytes()
-            await asyncio.to_thread(process_and_queue_frame, img_data)
-    except WebSocketDisconnect:
-        print("Client disconnected")
-
-# Function to process image and put it in the frame queue
-def process_and_queue_frame(img_data):
-    processed_frame = process_image(img_data)
-    if processed_frame:
-        with frame_lock:  # Lock to ensure thread-safe frame addition
-            if frame_queue.full():
-                frame_queue.get()  # Remove the oldest frame to maintain queue size
-            frame_queue.put(processed_frame)
-            print("Image received and processed.")
-    else:
-        print("Error processing image")
-
-@app.get('/')
-def go():
-    return PlainTextResponse("Welcome to the FastAPI server!")
+            processed_frame = await asyncio.to_thread(process_image, img_data)
+            if processed_frame:
+                with frame_lock:
+                    latest_frame = processed_frame  # Overwrite the latest frame
+    except WebSocketDisconnect as e:
+        print(f"Client disconnected: {e}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
 
 # Route to stream video feed
 @app.get("/video_feed")
@@ -104,15 +92,22 @@ async def video_feed():
     async def generate():
         while True:
             try:
-                frame = frame_queue.get(timeout=1)  # Wait for the next frame
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            except eventlet.queue.Empty:
-                continue  # No frame available, retry
+                with frame_lock:
+                    if latest_frame:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + latest_frame + b'\r\n')
+                await asyncio.sleep(0.03)  # ~30 FPS
+            except Exception as e:
+                print(f"Error in video stream: {e}")
 
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+# Welcome route
+@app.get("/")
+def go():
+    return PlainTextResponse("Welcome to the FastAPI server!")
+
 # Run FastAPI server using Uvicorn (FastAPI's ASGI server)
-if __name__ == '__main__':
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
