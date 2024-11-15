@@ -1,15 +1,13 @@
-# making async
 import eventlet
-eventlet.monkey_patch();
+eventlet.monkey_patch()
 
-from flask import Flask, Response, redirect
+from flask import Flask, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO
 import cv2
 import numpy as np
 import os
-import time
-from threading import Lock
+import queue
 
 app = Flask(__name__)
 CORS(app)
@@ -23,7 +21,6 @@ configPath = os.path.join(assets_folder, 'ssd_mobilenet_v3_large_coco_2020_01_14
 weightsPath = os.path.join(assets_folder, 'frozen_inference_graph.pb')
 
 # Load class labels
-classNames = []
 with open(classFile, 'rt') as f:
     classNames = f.read().rstrip('\n').split('\n')
 
@@ -34,11 +31,9 @@ net.setInputScale(1.0 / 127.5)
 net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
 
-# Lock for thread safety
-lock = Lock()
+# Queue for thread-safe frame handling
+frame_queue = queue.Queue(maxsize=5)
 
-# Store the most recent frame
-frame_data = None
 
 # Function to process the image
 def process_image(img_data):
@@ -76,32 +71,36 @@ def process_image(img_data):
         print(f"Error processing image: {e}")
         return None
 
+
 # WebSocket event to handle incoming images from the ESP32-CAM
 @socketio.on('image_stream')
 def handle_image_stream(img_data):
-    global frame_data
-    with lock:
-        # Process and store the latest frame for streaming
-        frame_data = process_image(img_data)
-        if frame_data:
+    try:
+        processed_frame = process_image(img_data)
+        if processed_frame:
+            if frame_queue.full():
+                frame_queue.get()  # Remove oldest frame to maintain queue size
+            frame_queue.put(processed_frame)
             print("Image received and processed.")
         else:
             print("Error processing image")
+    except Exception as e:
+        print(f"Error in image_stream handler: {e}")
 
-@app.route('/')
-def go_away():
-    return Response('Go to the video_feed page!')
 
-# Route for the video feed that streams the processed images
 @app.route('/video_feed')
 def video_feed():
     def generate():
         while True:
-            if frame_data:
+            try:
+                frame = frame_queue.get(timeout=1)  # Wait for the next frame
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-    # return Response('Somthing');
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            except queue.Empty:
+                continue  # No frame available, retry
+
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+
 if __name__ == '__main__':
-    socketio.run(app)
+    socketio.run(app, debug=True)
