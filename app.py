@@ -74,7 +74,7 @@ async def handle_image_stream(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            # Receive the image data
+            # Receive the image data (binary)
             img_data = await websocket.receive_bytes()
 
             # Process the image synchronously
