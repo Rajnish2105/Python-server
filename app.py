@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import eventlet
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
 from threading import Lock
@@ -96,7 +96,7 @@ def process_and_queue_frame(img_data):
 
 @app.get('/')
 def go():
-    yield('something')
+    return PlainTextResponse("Welcome to the FastAPI server!")
 
 # Route to stream video feed
 @app.get("/video_feed")
