@@ -1,6 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 gunicorn
 opencv-python
 numpy
 eventlet
+aiohttp
