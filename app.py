@@ -84,6 +84,10 @@ def handle_image_stream(img_data):
         else:
             print("Error processing image")
 
+@app.route('/')
+def go_away():
+    return redirect('/video_feed');
+
 # Route for the video feed that streams the processed images
 @app.route('/video_feed')
 def video_feed():
